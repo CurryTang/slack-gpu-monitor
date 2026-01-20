@@ -44,6 +44,10 @@ export async function getRemoteGpuStatus(server) {
     sshOptions.push('-i', server.identityFile);
   }
 
+  if (server.proxyJump) {
+    sshOptions.push('-J', server.proxyJump);
+  }
+
   const sshCmd = `ssh ${sshOptions.join(' ')} ${server.host} "${NVIDIA_SMI_CMD}"`;
 
   try {

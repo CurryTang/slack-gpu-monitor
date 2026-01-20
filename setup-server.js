@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 
 /**
- * Interactive CLI script to add a GPU server with SSH key setup
+ * Interactive CLI script to add GPU servers with SSH key setup
  * Run: node setup-server.js
  *
- * This script will:
- * 1. Prompt for server details
- * 2. Test SSH connection
- * 3. If SSH fails, offer to copy SSH key using ssh-copy-id
- * 4. Save the server configuration
+ * Supports:
+ * - Direct SSH connections
+ * - Proxy jump (bastion/jump host) connections
+ * - Automatic ssh-copy-id for key setup
  */
 
 import readline from 'readline';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { addServer, getServers, removeServer } from './src/config.js';
+import { addServer, getServers, removeServer, editServer } from './src/config.js';
 
 const execAsync = promisify(exec);
 
@@ -29,62 +28,53 @@ function question(prompt) {
   });
 }
 
-async function testSSHConnection(host, port, identityFile) {
-  const sshOptions = [
+/**
+ * Build SSH options array for a server
+ */
+function buildSSHOptions(server) {
+  const options = [
     '-o', 'ConnectTimeout=10',
     '-o', 'StrictHostKeyChecking=no',
-    '-o', 'BatchMode=yes',
-    '-p', port.toString(),
   ];
 
-  if (identityFile) {
-    sshOptions.push('-i', identityFile);
+  if (server.port && server.port !== 22) {
+    options.push('-p', server.port.toString());
   }
 
-  const cmd = `ssh ${sshOptions.join(' ')} ${host} "echo connected"`;
-
-  try {
-    await execAsync(cmd, { timeout: 15000 });
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
+  if (server.identityFile) {
+    options.push('-i', server.identityFile);
   }
+
+  if (server.proxyJump) {
+    options.push('-J', server.proxyJump);
+  }
+
+  return options;
 }
 
-async function testNvidiaSmi(host, port, identityFile) {
-  const sshOptions = [
-    '-o', 'ConnectTimeout=10',
-    '-o', 'StrictHostKeyChecking=no',
-    '-o', 'BatchMode=yes',
-    '-p', port.toString(),
-  ];
-
-  if (identityFile) {
-    sshOptions.push('-i', identityFile);
-  }
-
-  const cmd = `ssh ${sshOptions.join(' ')} ${host} "nvidia-smi --query-gpu=name --format=csv,noheader"`;
-
-  try {
-    const { stdout } = await execAsync(cmd, { timeout: 15000 });
-    return { success: true, gpus: stdout.trim().split('\n') };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
-
-async function copySSHKey(host, port, identityFile) {
+/**
+ * Copy SSH key to server using ssh-copy-id
+ */
+async function copySSHKey(server) {
   return new Promise((resolve) => {
-    const args = ['-p', port.toString()];
+    const args = [];
 
-    if (identityFile) {
-      args.push('-i', identityFile);
+    if (server.port && server.port !== 22) {
+      args.push('-p', server.port.toString());
     }
 
-    args.push(host);
+    if (server.identityFile) {
+      args.push('-i', server.identityFile);
+    }
+
+    if (server.proxyJump) {
+      args.push('-o', `ProxyJump=${server.proxyJump}`);
+    }
+
+    args.push(server.host);
 
     console.log(`\nRunning: ssh-copy-id ${args.join(' ')}`);
-    console.log('You may be prompted for the password...\n');
+    console.log('You will be prompted for the password...\n');
 
     const child = spawn('ssh-copy-id', args, {
       stdio: 'inherit',
@@ -101,6 +91,40 @@ async function copySSHKey(host, port, identityFile) {
   });
 }
 
+/**
+ * Test SSH connection to server
+ */
+async function testSSHConnection(server) {
+  const options = buildSSHOptions(server);
+  options.push('-o', 'BatchMode=yes');
+
+  const cmd = `ssh ${options.join(' ')} ${server.host} "echo connected"`;
+
+  try {
+    await execAsync(cmd, { timeout: 15000 });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Test nvidia-smi on remote server
+ */
+async function testNvidiaSmi(server) {
+  const options = buildSSHOptions(server);
+  options.push('-o', 'BatchMode=yes');
+
+  const cmd = `ssh ${options.join(' ')} ${server.host} "nvidia-smi --query-gpu=name --format=csv,noheader"`;
+
+  try {
+    const { stdout } = await execAsync(cmd, { timeout: 15000 });
+    return { success: true, gpus: stdout.trim().split('\n') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 async function listServers() {
   const servers = await getServers();
 
@@ -114,8 +138,11 @@ async function listServers() {
     console.log(`  ${server.name}`);
     console.log(`    Host: ${server.host}`);
     console.log(`    Port: ${server.port}`);
+    if (server.proxyJump) {
+      console.log(`    Proxy Jump: ${server.proxyJump}`);
+    }
     if (server.identityFile) {
-      console.log(`    Key:  ${server.identityFile}`);
+      console.log(`    Key: ${server.identityFile}`);
     }
     console.log('');
   }
@@ -124,6 +151,7 @@ async function listServers() {
 async function addNewServer() {
   console.log('\n=== Add New GPU Server ===\n');
 
+  // Get server details
   const name = await question('Server name (e.g., training-server-1): ');
   if (!name.trim()) {
     console.log('Server name is required.');
@@ -139,62 +167,68 @@ async function addNewServer() {
   const portStr = await question('SSH port [22]: ');
   const port = parseInt(portStr) || 22;
 
-  const identityFile = await question('SSH key path (leave empty for default): ');
+  const proxyJump = await question('Proxy jump host (e.g., user@bastion.example.com, leave empty if none): ');
 
-  console.log('\nTesting SSH connection...');
+  const identityFile = await question('SSH private key path (leave empty for default ~/.ssh/id_*): ');
 
-  let sshResult = await testSSHConnection(host, port, identityFile || null);
+  const serverConfig = {
+    name: name.trim(),
+    host: host.trim(),
+    port,
+    proxyJump: proxyJump.trim() || null,
+    identityFile: identityFile.trim() || null,
+  };
 
-  if (!sshResult.success) {
-    console.log('❌ SSH connection failed:', sshResult.error);
+  // Ask if user wants to copy SSH key
+  const shouldCopy = await question('\nCopy SSH key to this server now? (y/n) [y]: ');
 
-    const shouldCopy = await question('\nWould you like to copy your SSH key to this server? (y/n): ');
+  if (shouldCopy.toLowerCase() !== 'n') {
+    const success = await copySSHKey(serverConfig);
 
-    if (shouldCopy.toLowerCase() === 'y') {
-      const success = await copySSHKey(host, port, identityFile || null);
-
-      if (success) {
-        console.log('\n✅ SSH key copied successfully!');
-        console.log('Testing connection again...');
-        sshResult = await testSSHConnection(host, port, identityFile || null);
-      } else {
-        console.log('\n❌ Failed to copy SSH key.');
-      }
-    }
-  }
-
-  if (!sshResult.success) {
-    const addAnyway = await question('\nSSH connection failed. Add server anyway? (y/n): ');
-    if (addAnyway.toLowerCase() !== 'y') {
-      console.log('Server not added.');
-      return;
-    }
-  } else {
-    console.log('✅ SSH connection successful!');
-
-    console.log('\nTesting nvidia-smi...');
-    const nvidiaResult = await testNvidiaSmi(host, port, identityFile || null);
-
-    if (nvidiaResult.success) {
-      console.log(`✅ Found ${nvidiaResult.gpus.length} GPU(s):`);
-      nvidiaResult.gpus.forEach((gpu, i) => console.log(`   GPU ${i}: ${gpu}`));
+    if (success) {
+      console.log('\n✅ SSH key copied successfully!');
     } else {
-      console.log('⚠️  nvidia-smi not found or failed on remote server.');
-      const addAnyway = await question('Add server anyway? (y/n): ');
-      if (addAnyway.toLowerCase() !== 'y') {
+      console.log('\n⚠️  SSH key copy may have failed. You can try again later.');
+      const continueAdd = await question('Add server anyway? (y/n): ');
+      if (continueAdd.toLowerCase() !== 'y') {
         console.log('Server not added.');
         return;
       }
     }
   }
 
+  // Test connection
+  const shouldTest = await question('\nTest SSH connection now? (y/n) [y]: ');
+
+  if (shouldTest.toLowerCase() !== 'n') {
+    console.log('Testing SSH connection...');
+    const sshResult = await testSSHConnection(serverConfig);
+
+    if (sshResult.success) {
+      console.log('✅ SSH connection successful!');
+
+      console.log('Testing nvidia-smi...');
+      const nvidiaResult = await testNvidiaSmi(serverConfig);
+
+      if (nvidiaResult.success) {
+        console.log(`✅ Found ${nvidiaResult.gpus.length} GPU(s):`);
+        nvidiaResult.gpus.forEach((gpu, i) => console.log(`   GPU ${i}: ${gpu}`));
+      } else {
+        console.log('⚠️  nvidia-smi not found or failed on remote server.');
+      }
+    } else {
+      console.log('❌ SSH connection failed:', sshResult.error);
+      const continueAdd = await question('Add server anyway? (y/n): ');
+      if (continueAdd.toLowerCase() !== 'y') {
+        console.log('Server not added.');
+        return;
+      }
+    }
+  }
+
+  // Save server
   try {
-    const server = await addServer({
-      name: name.trim(),
-      host: host.trim(),
-      port,
-      identityFile: identityFile.trim() || null,
-    });
+    const server = await addServer(serverConfig);
     console.log(`\n✅ Server "${server.name}" added successfully!\n`);
   } catch (error) {
     console.log(`\n❌ Failed to add server: ${error.message}\n`);
@@ -232,6 +266,93 @@ async function removeExistingServer() {
   }
 }
 
+async function editExistingServer() {
+  const servers = await getServers();
+
+  if (servers.length === 0) {
+    console.log('\nNo servers to edit.\n');
+    return;
+  }
+
+  await listServers();
+
+  const name = await question('Enter server name to edit: ');
+
+  if (!name.trim()) {
+    console.log('No server name provided.');
+    return;
+  }
+
+  const server = servers.find(s => s.name.toLowerCase() === name.trim().toLowerCase());
+  if (!server) {
+    console.log(`Server "${name}" not found.`);
+    return;
+  }
+
+  console.log(`\nEditing "${server.name}" (press Enter to keep current value)\n`);
+
+  const newName = await question(`Server name [${server.name}]: `);
+  const newHost = await question(`SSH host [${server.host}]: `);
+  const newPortStr = await question(`SSH port [${server.port}]: `);
+  const newProxyJump = await question(`Proxy jump [${server.proxyJump || 'none'}]: `);
+  const newIdentityFile = await question(`SSH key path [${server.identityFile || 'default'}]: `);
+
+  const updates = {};
+  if (newName.trim()) updates.name = newName.trim();
+  if (newHost.trim()) updates.host = newHost.trim();
+  if (newPortStr.trim()) updates.port = parseInt(newPortStr);
+  if (newProxyJump.trim()) {
+    updates.proxyJump = newProxyJump.trim() === 'none' ? null : newProxyJump.trim();
+  }
+  if (newIdentityFile.trim()) {
+    updates.identityFile = newIdentityFile.trim() === 'default' ? null : newIdentityFile.trim();
+  }
+
+  if (Object.keys(updates).length === 0) {
+    console.log('No changes made.');
+    return;
+  }
+
+  try {
+    await editServer(name.trim(), updates);
+    console.log(`\n✅ Server updated successfully!\n`);
+  } catch (error) {
+    console.log(`\n❌ ${error.message}\n`);
+  }
+}
+
+async function copyKeyToServer() {
+  const servers = await getServers();
+
+  if (servers.length === 0) {
+    console.log('\nNo servers configured. Add a server first.\n');
+    return;
+  }
+
+  await listServers();
+
+  const name = await question('Enter server name to copy SSH key to: ');
+
+  if (!name.trim()) {
+    console.log('No server name provided.');
+    return;
+  }
+
+  const server = servers.find(s => s.name.toLowerCase() === name.trim().toLowerCase());
+  if (!server) {
+    console.log(`Server "${name}" not found.`);
+    return;
+  }
+
+  const success = await copySSHKey(server);
+
+  if (success) {
+    console.log('\n✅ SSH key copied successfully!\n');
+  } else {
+    console.log('\n❌ Failed to copy SSH key.\n');
+  }
+}
+
 async function testAllServers() {
   const servers = await getServers();
 
@@ -245,10 +366,10 @@ async function testAllServers() {
   for (const server of servers) {
     process.stdout.write(`Testing ${server.name}... `);
 
-    const sshResult = await testSSHConnection(server.host, server.port, server.identityFile);
+    const sshResult = await testSSHConnection(server);
 
     if (sshResult.success) {
-      const nvidiaResult = await testNvidiaSmi(server.host, server.port, server.identityFile);
+      const nvidiaResult = await testNvidiaSmi(server);
       if (nvidiaResult.success) {
         console.log(`✅ OK (${nvidiaResult.gpus.length} GPU(s))`);
       } else {
@@ -270,11 +391,13 @@ async function main() {
     console.log('\nOptions:');
     console.log('  1. List configured servers');
     console.log('  2. Add a new server');
-    console.log('  3. Remove a server');
-    console.log('  4. Test all servers');
-    console.log('  5. Exit');
+    console.log('  3. Edit a server');
+    console.log('  4. Remove a server');
+    console.log('  5. Copy SSH key to a server');
+    console.log('  6. Test all servers');
+    console.log('  7. Exit');
 
-    const choice = await question('\nSelect option (1-5): ');
+    const choice = await question('\nSelect option (1-7): ');
 
     switch (choice.trim()) {
       case '1':
@@ -284,12 +407,18 @@ async function main() {
         await addNewServer();
         break;
       case '3':
-        await removeExistingServer();
+        await editExistingServer();
         break;
       case '4':
-        await testAllServers();
+        await removeExistingServer();
         break;
       case '5':
+        await copyKeyToServer();
+        break;
+      case '6':
+        await testAllServers();
+        break;
+      case '7':
         console.log('\nGoodbye!\n');
         rl.close();
         process.exit(0);

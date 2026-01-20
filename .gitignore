@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Server configuration
+servers.json
+
 # Dependencies
 node_modules/
 

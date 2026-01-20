@@ -43,6 +43,7 @@ export async function saveConfig(config) {
  * @param {string} server.host - SSH host (user@hostname or just hostname)
  * @param {number} [server.port=22] - SSH port
  * @param {string} [server.identityFile] - Path to SSH private key
+ * @param {string} [server.proxyJump] - Proxy jump host (e.g., user@bastion.example.com)
  */
 export async function addServer(server) {
   const config = await loadConfig();
@@ -62,6 +63,7 @@ export async function addServer(server) {
     host: server.host,
     port: server.port || 22,
     identityFile: server.identityFile || null,
+    proxyJump: server.proxyJump || null,
     createdAt: new Date().toISOString(),
   };
 
@@ -115,6 +117,9 @@ export async function editServer(nameOrId, updates) {
   if (updates.port) config.servers[index].port = updates.port;
   if (updates.identityFile !== undefined) {
     config.servers[index].identityFile = updates.identityFile || null;
+  }
+  if (updates.proxyJump !== undefined) {
+    config.servers[index].proxyJump = updates.proxyJump || null;
   }
 
   config.servers[index].updatedAt = new Date().toISOString();
