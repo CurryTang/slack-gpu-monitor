@@ -17,7 +17,7 @@ import { addServer, getServers, removeServer, editServer } from './src/config.js
 
 const execAsync = promisify(exec);
 
-const rl = readline.createInterface({
+let rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
 });
@@ -25,6 +25,23 @@ const rl = readline.createInterface({
 function question(prompt) {
   return new Promise((resolve) => {
     rl.question(prompt, resolve);
+  });
+}
+
+/**
+ * Pause readline to allow spawned process to use stdin
+ */
+function pauseReadline() {
+  rl.close();
+}
+
+/**
+ * Resume readline after spawned process is done
+ */
+function resumeReadline() {
+  rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
   });
 }
 
@@ -56,6 +73,9 @@ function buildSSHOptions(server) {
  * Copy SSH key to server using ssh-copy-id
  */
 async function copySSHKey(server) {
+  // Pause readline so ssh-copy-id can use stdin for password input
+  pauseReadline();
+
   return new Promise((resolve) => {
     const args = [];
 
@@ -81,11 +101,14 @@ async function copySSHKey(server) {
     });
 
     child.on('close', (code) => {
+      // Resume readline after ssh-copy-id is done
+      resumeReadline();
       resolve(code === 0);
     });
 
     child.on('error', (err) => {
       console.error('Failed to run ssh-copy-id:', err.message);
+      resumeReadline();
       resolve(false);
     });
   });
