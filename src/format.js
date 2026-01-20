@@ -145,13 +145,15 @@ export function formatMultiServerMessage(serverResults) {
       // Combine all GPUs for this server into a single text block
       // This drastically reduces the number of blocks used
       // Slack section text limit is 3000 chars, so we may need to split
-      const serverHeader = `${serverStatus} *${result.server.name}* (\`${result.server.host}\`)`;
+      const serverHeader = `${serverStatus} *${result.server.name}*`;
       const gpuLines = result.gpus.map((gpu) => {
         const status = getGpuStatusIndicator(gpu);
         const memoryPercent = ((gpu.memoryUsed / gpu.memoryTotal) * 100).toFixed(0);
         const memGB = (gpu.memoryUsed / 1024).toFixed(1);
         const memTotalGB = (gpu.memoryTotal / 1024).toFixed(1);
-        return `${status.emoji} GPU ${gpu.index} ${gpu.name} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB (${memoryPercent}%) | ${gpu.temperature}°C`;
+        // Extract short GPU name (e.g., "NVIDIA RTX A6000" -> "A6000", "NVIDIA H100 NVL" -> "H100")
+        const shortName = gpu.name.replace(/NVIDIA\s*(RTX\s*)?/i, '').replace(/\s+NVL.*$/i, '').trim();
+        return `${status.emoji} ${gpu.index}: ${shortName} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB`;
       });
 
       // Check if we need to split into multiple blocks (3000 char limit)
