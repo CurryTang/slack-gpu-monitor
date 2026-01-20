@@ -1,0 +1,2 @@
+I'm now trying to build a Slack bot which can help me monitor the GPU availability across a list of remote servers. You can assume that I have SSH access to these servers, enabled with ssh-copy-id so I can do passwordless authentication. It should support a /gpu command which will show the GPU availability across all the remote servers. Moreover, it should support a /config command which will allow me to add or remove remote servers from the list.
+

@@ -1,0 +1,19 @@
+{
+  "name": "slack-gpu-monitor",
+  "version": "1.0.0",
+  "description": "Slack bot for monitoring GPU status via nvidia-smi",
+  "main": "src/app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "setup": "node setup-server.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.0",
+    "dotenv": "^16.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
