@@ -246,7 +246,142 @@ docker run -d \
   gpu-monitor
 ```
 
-### Option D: Run as a Systemd Service (Linux)
+### Option D: Deploy on DigitalOcean Droplet (Cheapest Option)
+
+The cheapest option is a **$4/month Basic Droplet** (512MB RAM, 1 vCPU). This bot uses minimal resources.
+
+#### Step 1: Create a Droplet
+
+1. Go to [cloud.digitalocean.com](https://cloud.digitalocean.com)
+2. Click **"Create"** → **"Droplets"**
+3. Choose:
+   - **Region:** Closest to your GPU servers
+   - **Image:** Ubuntu 24.04 LTS
+   - **Droplet Type:** Basic (Regular SSD)
+   - **Size:** $4/mo (512 MB / 1 CPU) or $6/mo (1 GB / 1 CPU)
+   - **Authentication:** SSH Key (recommended) or Password
+4. Click **"Create Droplet"**
+5. Note the IP address once created
+
+#### Step 2: Connect to Your Droplet
+
+```bash
+ssh root@YOUR_DROPLET_IP
+```
+
+#### Step 3: Install Node.js
+
+```bash
+# Update system
+apt update && apt upgrade -y
+
+# Install Node.js 20.x
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+
+# Verify installation
+node --version  # Should show v20.x.x
+npm --version
+```
+
+#### Step 4: Create a Non-Root User (Recommended)
+
+```bash
+# Create user
+adduser gpubot
+usermod -aG sudo gpubot
+
+# Switch to new user
+su - gpubot
+```
+
+#### Step 5: Clone/Upload Your Project
+
+**Option A: Using Git**
+```bash
+cd ~
+git clone https://github.com/YOUR_USERNAME/slack-gpu.git
+cd slack-gpu
+```
+
+**Option B: Using SCP (from your local machine)**
+```bash
+# Run this on your LOCAL machine
+scp -r /path/to/slack-gpu gpubot@YOUR_DROPLET_IP:~/
+```
+
+#### Step 6: Install Dependencies and Configure
+
+```bash
+cd ~/slack-gpu
+npm install
+
+# Create .env file
+nano .env
+```
+
+Add your Slack tokens:
+```
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+```
+
+Save with `Ctrl+X`, then `Y`, then `Enter`.
+
+#### Step 7: Set Up SSH Keys for GPU Servers
+
+```bash
+# Generate SSH key for the bot
+ssh-keygen -t ed25519 -C "gpu-monitor-bot"
+
+# Run the setup tool to add servers and copy keys
+npm run setup
+```
+
+#### Step 8: Install PM2 and Start the Bot
+
+```bash
+# Install PM2 globally
+sudo npm install -g pm2
+
+# Start the bot
+pm2 start src/app.js --name "gpu-monitor"
+
+# Make PM2 start on boot
+pm2 startup
+# Copy and run the command it outputs
+
+# Save the process list
+pm2 save
+```
+
+#### Step 9: Verify It's Running
+
+```bash
+pm2 status
+pm2 logs gpu-monitor
+```
+
+#### Useful Commands
+
+```bash
+pm2 logs gpu-monitor     # View logs
+pm2 restart gpu-monitor  # Restart bot
+pm2 stop gpu-monitor     # Stop bot
+pm2 monit                # Real-time monitoring
+```
+
+#### Cost Summary
+
+| Resource | Cost |
+|----------|------|
+| Basic Droplet (512MB) | $4/month |
+| Basic Droplet (1GB) | $6/month |
+| Bandwidth | Usually free (included) |
+
+---
+
+### Option E: Run as a Systemd Service (Linux)
 
 Create `/etc/systemd/system/gpu-monitor.service`:
 ```ini
