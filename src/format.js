@@ -97,6 +97,7 @@ export function formatGpuMessage(gpuInfoArray, serverName = null) {
 
 /**
  * Format multi-server GPU status into a Slack Block Kit message
+ * Uses a compact format to stay under Slack's 50 block limit
  * @param {Array} serverResults - Array of { server, gpus, error } objects
  */
 export function formatMultiServerMessage(serverResults) {
@@ -130,51 +131,48 @@ export function formatMultiServerMessage(serverResults) {
   for (const result of serverResults) {
     // Server header
     const serverStatus = result.error ? '🔴' : '🟢';
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `${serverStatus} *${result.server.name}* (\`${result.server.host}\`)`,
-      },
-    });
 
     if (result.error) {
-      // Show error
+      // Show server with error in a single block
       blocks.push({
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `❌ ${result.error}`,
-          },
-        ],
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `${serverStatus} *${result.server.name}* (\`${result.server.host}\`)\n❌ ${result.error}`,
+        },
       });
     } else {
-      // Show GPUs
-      for (const gpu of result.gpus) {
+      // Combine all GPUs for this server into a single text block
+      // This drastically reduces the number of blocks used
+      // Slack section text limit is 3000 chars, so we may need to split
+      const serverHeader = `${serverStatus} *${result.server.name}* (\`${result.server.host}\`)`;
+      const gpuLines = result.gpus.map((gpu) => {
         const status = getGpuStatusIndicator(gpu);
-        const memoryPercent = ((gpu.memoryUsed / gpu.memoryTotal) * 100).toFixed(1);
+        const memoryPercent = ((gpu.memoryUsed / gpu.memoryTotal) * 100).toFixed(0);
+        const memGB = (gpu.memoryUsed / 1024).toFixed(1);
+        const memTotalGB = (gpu.memoryTotal / 1024).toFixed(1);
+        return `${status.emoji} GPU ${gpu.index} ${gpu.name} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB (${memoryPercent}%) | ${gpu.temperature}°C`;
+      });
 
-        blocks.push({
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text:
-              `  └ *GPU ${gpu.index}: ${gpu.name}*\n` +
-              `     ${status.emoji} ${gpu.gpuUtilization}% util | ${gpu.memoryUsed}/${gpu.memoryTotal} MiB (${memoryPercent}%) | ${gpu.temperature}°C`,
-          },
-        });
-
-        blocks.push({
-          type: 'context',
-          elements: [
-            {
-              type: 'mrkdwn',
-              text: `     GPU: ${createProgressBar(gpu.gpuUtilization, 8)} | Mem: ${createProgressBar(parseFloat(memoryPercent), 8)}`,
-            },
-          ],
-        });
+      // Check if we need to split into multiple blocks (3000 char limit)
+      let currentText = serverHeader;
+      for (const line of gpuLines) {
+        if ((currentText + '\n' + line).length > 2900) {
+          // Push current block and start a new one
+          blocks.push({
+            type: 'section',
+            text: { type: 'mrkdwn', text: currentText },
+          });
+          currentText = line;
+        } else {
+          currentText += '\n' + line;
+        }
       }
+      // Push remaining text
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: currentText },
+      });
     }
 
     blocks.push({
@@ -185,6 +183,25 @@ export function formatMultiServerMessage(serverResults) {
   // Remove the last divider
   if (blocks.length > 0 && blocks[blocks.length - 1].type === 'divider') {
     blocks.pop();
+  }
+
+  // Safety check: if we still exceed 50 blocks, truncate and add a warning
+  const MAX_BLOCKS = 50;
+  if (blocks.length > MAX_BLOCKS) {
+    const truncated = blocks.slice(0, MAX_BLOCKS - 1);
+    truncated.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `⚠️ Output truncated. Showing partial results (${MAX_BLOCKS} block limit).`,
+        },
+      ],
+    });
+    return {
+      text: `GPU Status Report - ${serverResults.length} server(s), ${totalGpus} GPU(s)`,
+      blocks: truncated,
+    };
   }
 
   return {
