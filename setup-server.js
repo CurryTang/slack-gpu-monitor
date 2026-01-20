@@ -8,6 +8,7 @@
  * - Direct SSH connections
  * - Proxy jump (bastion/jump host) connections
  * - Automatic ssh-copy-id for key setup
+ * - Timeout handling to prevent hanging
  */
 
 import readline from 'readline';
@@ -16,6 +17,11 @@ import { promisify } from 'util';
 import { addServer, getServers, removeServer, editServer } from './src/config.js';
 
 const execAsync = promisify(exec);
+
+// Timeout constants (in milliseconds)
+const SSH_COPY_ID_TIMEOUT = 60000; // 60 seconds for ssh-copy-id (needs user input)
+const SSH_TEST_TIMEOUT = 15000;    // 15 seconds for SSH test
+const NVIDIA_SMI_TIMEOUT = 20000;  // 20 seconds for nvidia-smi
 
 let rl = readline.createInterface({
   input: process.stdin,
@@ -70,14 +76,16 @@ function buildSSHOptions(server) {
 }
 
 /**
- * Copy SSH key to server using ssh-copy-id
+ * Copy SSH key to server using ssh-copy-id with timeout
  */
 async function copySSHKey(server) {
   // Pause readline so ssh-copy-id can use stdin for password input
   pauseReadline();
 
   return new Promise((resolve) => {
-    const args = [];
+    const args = [
+      '-o', 'ConnectTimeout=10',
+    ];
 
     if (server.port && server.port !== 22) {
       args.push('-p', server.port.toString());
@@ -94,19 +102,41 @@ async function copySSHKey(server) {
     args.push(server.host);
 
     console.log(`\nRunning: ssh-copy-id ${args.join(' ')}`);
+    console.log(`Timeout: ${SSH_COPY_ID_TIMEOUT / 1000} seconds`);
     console.log('You will be prompted for the password...\n');
 
     const child = spawn('ssh-copy-id', args, {
       stdio: 'inherit',
     });
 
+    let timedOut = false;
+
+    // Set timeout
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      console.log('\n\n⏱️  Timeout: ssh-copy-id took too long. Killing process...');
+      child.kill('SIGTERM');
+      // Force kill after 2 seconds if still running
+      setTimeout(() => {
+        if (!child.killed) {
+          child.kill('SIGKILL');
+        }
+      }, 2000);
+    }, SSH_COPY_ID_TIMEOUT);
+
     child.on('close', (code) => {
+      clearTimeout(timeoutId);
       // Resume readline after ssh-copy-id is done
       resumeReadline();
-      resolve(code === 0);
+      if (timedOut) {
+        resolve(false);
+      } else {
+        resolve(code === 0);
+      }
     });
 
     child.on('error', (err) => {
+      clearTimeout(timeoutId);
       console.error('Failed to run ssh-copy-id:', err.message);
       resumeReadline();
       resolve(false);
@@ -115,7 +145,7 @@ async function copySSHKey(server) {
 }
 
 /**
- * Test SSH connection to server
+ * Test SSH connection to server with timeout
  */
 async function testSSHConnection(server) {
   const options = buildSSHOptions(server);
@@ -124,15 +154,18 @@ async function testSSHConnection(server) {
   const cmd = `ssh ${options.join(' ')} ${server.host} "echo connected"`;
 
   try {
-    await execAsync(cmd, { timeout: 15000 });
+    await execAsync(cmd, { timeout: SSH_TEST_TIMEOUT });
     return { success: true };
   } catch (error) {
+    if (error.killed) {
+      return { success: false, error: `Timeout after ${SSH_TEST_TIMEOUT / 1000}s - check proxy jump or network settings` };
+    }
     return { success: false, error: error.message };
   }
 }
 
 /**
- * Test nvidia-smi on remote server
+ * Test nvidia-smi on remote server with timeout
  */
 async function testNvidiaSmi(server) {
   const options = buildSSHOptions(server);
@@ -141,9 +174,12 @@ async function testNvidiaSmi(server) {
   const cmd = `ssh ${options.join(' ')} ${server.host} "nvidia-smi --query-gpu=name --format=csv,noheader"`;
 
   try {
-    const { stdout } = await execAsync(cmd, { timeout: 15000 });
+    const { stdout } = await execAsync(cmd, { timeout: NVIDIA_SMI_TIMEOUT });
     return { success: true, gpus: stdout.trim().split('\n') };
   } catch (error) {
+    if (error.killed) {
+      return { success: false, error: `Timeout after ${NVIDIA_SMI_TIMEOUT / 1000}s` };
+    }
     return { success: false, error: error.message };
   }
 }
@@ -211,7 +247,7 @@ async function addNewServer() {
     if (success) {
       console.log('\n✅ SSH key copied successfully!');
     } else {
-      console.log('\n⚠️  SSH key copy may have failed. You can try again later.');
+      console.log('\n⚠️  SSH key copy may have failed or timed out. You can try again later with option 5.');
       const continueAdd = await question('Add server anyway? (y/n): ');
       if (continueAdd.toLowerCase() !== 'y') {
         console.log('Server not added.');
@@ -224,23 +260,25 @@ async function addNewServer() {
   const shouldTest = await question('\nTest SSH connection now? (y/n) [y]: ');
 
   if (shouldTest.toLowerCase() !== 'n') {
-    console.log('Testing SSH connection...');
+    process.stdout.write('Testing SSH connection... ');
     const sshResult = await testSSHConnection(serverConfig);
 
     if (sshResult.success) {
-      console.log('✅ SSH connection successful!');
+      console.log('✅ OK');
 
-      console.log('Testing nvidia-smi...');
+      process.stdout.write('Testing nvidia-smi... ');
       const nvidiaResult = await testNvidiaSmi(serverConfig);
 
       if (nvidiaResult.success) {
         console.log(`✅ Found ${nvidiaResult.gpus.length} GPU(s):`);
         nvidiaResult.gpus.forEach((gpu, i) => console.log(`   GPU ${i}: ${gpu}`));
       } else {
-        console.log('⚠️  nvidia-smi not found or failed on remote server.');
+        console.log('⚠️  Failed');
+        console.log(`   ${nvidiaResult.error}`);
       }
     } else {
-      console.log('❌ SSH connection failed:', sshResult.error);
+      console.log('❌ Failed');
+      console.log(`   ${sshResult.error}`);
       const continueAdd = await question('Add server anyway? (y/n): ');
       if (continueAdd.toLowerCase() !== 'y') {
         console.log('Server not added.');
@@ -372,7 +410,7 @@ async function copyKeyToServer() {
   if (success) {
     console.log('\n✅ SSH key copied successfully!\n');
   } else {
-    console.log('\n❌ Failed to copy SSH key.\n');
+    console.log('\n❌ Failed to copy SSH key (may have timed out).\n');
   }
 }
 
@@ -399,7 +437,11 @@ async function testAllServers() {
         console.log('⚠️  SSH OK, but nvidia-smi failed');
       }
     } else {
-      console.log('❌ Connection failed');
+      if (sshResult.error.includes('Timeout')) {
+        console.log('❌ Timeout');
+      } else {
+        console.log('❌ Connection failed');
+      }
     }
   }
   console.log('');
