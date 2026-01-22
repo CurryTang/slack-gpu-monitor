@@ -6,6 +6,8 @@ A Slack bot that monitors NVIDIA GPU status across multiple remote servers using
 
 ![GPU Status Demo](assets/demo.png)
 
+![GPU Status Demo 2](assets/demo2.png)
+
 ## Features
 
 - **Multi-server monitoring** - Monitor GPUs across multiple remote servers via SSH
