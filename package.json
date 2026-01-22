@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
-    "setup": "node setup-server.js"
+    "setup": "node setup-server.js",
+    "test": "node tests/test-features.js"
   },
   "dependencies": {
     "@slack/bolt": "^3.17.0",
