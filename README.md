@@ -2,13 +2,21 @@
 
 A Slack bot that monitors NVIDIA GPU status across multiple remote servers using `nvidia-smi` via SSH and reports to Slack channels.
 
+## Demo
+
+![GPU Status Demo](assets/demo.png)
+
 ## Features
 
 - **Multi-server monitoring** - Monitor GPUs across multiple remote servers via SSH
 - **Server management** - Add, remove, and edit server configurations via `/config`
 - **Real-time status** - Check GPU status on-demand with `/gpu`
 - **Scheduled monitoring** - Set up periodic updates with `/gpu start`
-- **Rich formatting** - Visual progress bars, status indicators, and detailed metrics
+- **GPU occupation** - Reserve GPUs by allocating memory via `/occupy`
+- **Auto-occupy** - Watch for available GPUs and automatically occupy them via `/monitor`
+- **Process management** - Cancel occupation processes via `/cancel`
+- **Direct messages** - Chat with the bot directly in Slack DMs
+- **Compact display** - Clean, space-efficient GPU status output
 
 ---
 
@@ -48,21 +56,40 @@ Socket Mode allows the bot to receive events without exposing a public URL.
 ### Step 4: Create the Slash Commands
 
 1. In the left sidebar, click **"Slash Commands"**
-2. Click **"Create New Command"** and create TWO commands:
+2. Click **"Create New Command"** for each of the following:
 
-**Command 1: /gpu**
-- **Command:** `/gpu`
-- **Short Description:** `Check GPU status`
-- **Usage Hint:** `[start|stop|help]`
-
-**Command 2: /config**
-- **Command:** `/config`
-- **Short Description:** `Manage GPU server configurations`
-- **Usage Hint:** `[add|remove|edit|list|help]`
+| Command | Short Description | Usage Hint |
+|---------|-------------------|------------|
+| `/gpu` | Check GPU status | `[start\|stop\|help]` |
+| `/config` | Manage server configurations | `[add\|remove\|edit\|list\|help]` |
+| `/occupy` | Occupy GPUs on a server | `<server> <gpus> <mem_gb> <python>` |
+| `/monitor` | Auto-monitor and occupy GPUs | `start\|stop\|list` |
+| `/cancel` | Cancel GPU occupation | `<server> <username>` |
+| `/gpuhelp` | Show GPU Monitor help | *(leave empty)* |
 
 3. Click **"Save"** for each command
 
-### Step 5: Install the App to Your Workspace
+### Step 5: Enable Direct Messages (Optional)
+
+To allow users to DM the bot directly:
+
+1. In the left sidebar, click **"App Home"**
+2. Scroll to **"Show Tabs"**
+3. Enable **"Messages Tab"**
+4. Check **"Allow users to send Slash commands and messages from the messages tab"**
+
+5. In the left sidebar, click **"Event Subscriptions"**
+6. Toggle **"Enable Events"** to ON
+7. Under **"Subscribe to bot events"**, add:
+   - `message.im`
+   - `app_home_opened`
+
+8. In **"OAuth & Permissions"**, ensure these scopes are added:
+   - `im:history`
+   - `im:read`
+   - `im:write`
+
+### Step 6: Install the App to Your Workspace
 
 1. In the left sidebar, click **"Install App"**
 2. Click **"Install to Workspace"**
@@ -446,6 +473,62 @@ sudo systemctl start gpu-monitor
 | `/gpu stop` | Stop periodic monitoring |
 | `/gpu help` | Show help message |
 
+### GPU Occupation Commands (`/occupy`)
+
+Reserve GPUs by allocating memory with PyTorch:
+
+| Command | Description |
+|---------|-------------|
+| `/occupy <server> <gpu_ids> <memory_gb> <python_path>` | Occupy specified GPUs |
+| `/occupy help` | Show occupation help |
+
+**Example:**
+```
+/occupy grandrapids 0,1,2 40 /home/user/miniconda3/bin/python
+```
+
+**Note:** PyTorch must be installed at the specified Python path.
+
+### Auto-Occupy Monitor Commands (`/monitor`)
+
+Watch for available GPUs and automatically occupy them when free:
+
+| Command | Description |
+|---------|-------------|
+| `/monitor start <server> <gpu_ids> <mem_gb> <python_path> <freq_min> [min_free_gb]` | Start auto-monitor |
+| `/monitor stop <monitor_id>` | Stop a specific monitor |
+| `/monitor stop all` | Stop all monitors |
+| `/monitor list` | List active monitors |
+| `/monitor help` | Show monitor help |
+
+**Example:**
+```
+/monitor start grandrapids 0,1 40 /home/user/miniconda3/bin/python 30 45
+```
+
+This checks every 30 minutes if GPUs 0,1 have at least 45GB free, then occupies them with 40GB each. The monitor stops after the first successful occupation (one-shot).
+
+### Cancel Commands (`/cancel`)
+
+Kill GPU occupation processes on a server:
+
+| Command | Description |
+|---------|-------------|
+| `/cancel <server> <username>` | Kill occupation processes for a user |
+| `/cancel help` | Show cancel help |
+
+**Example:**
+```
+/cancel grandrapids john
+```
+
+### Direct Messages
+
+You can also DM the bot directly! Available commands:
+- `help` - Show all commands
+- `status` - Check GPU status
+- `servers` - List configured servers
+
 ### Example Output (Multi-Server)
 
 ```
@@ -505,10 +588,16 @@ slack-gpu/
 ├── servers.json         # Server configurations (auto-created)
 ├── setup-server.js      # Interactive CLI for server setup
 ├── README.md            # This documentation
+├── assets/
+│   └── demo.png         # Demo screenshot
+├── scripts/
+│   └── occupy_gpu.py    # GPU occupation script
+├── tests/
+│   └── test-features.js # Feature tests
 └── src/
     ├── app.js           # Main bot application
     ├── config.js        # Server configuration management
-    ├── gpu.js           # GPU monitoring (local + SSH)
+    ├── gpu.js           # GPU monitoring + occupation
     └── format.js        # Slack message formatting
 ```
 
