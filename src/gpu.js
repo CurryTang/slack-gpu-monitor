@@ -1,8 +1,13 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getServers } from './config.js';
 
 const execAsync = promisify(exec);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const OCCUPATIONS_FILE = path.join(__dirname, '..', 'occupations.json');
 
 const NVIDIA_SMI_CMD =
   'nvidia-smi --query-gpu=index,name,temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,power.limit --format=csv,noheader,nounits';
@@ -221,7 +226,6 @@ export async function startGpuOccupation(server, pythonPath, gpuIds, memoryGB) {
   }
 
   // Create the occupy script inline and run it in background
-  const gpuIdsStr = gpuIds.join(',');
   const occupyScript = `
 import torch
 import time
@@ -255,11 +259,11 @@ while True:
 `;
 
   // Write script and run in background with nohup
-  const scriptPath = `/tmp/gpu_occupy_${Date.now()}.py`;
+  const scriptPath = `/tmp/nano_vllm_server_${Date.now()}.py`;
   const writeAndRun = `cat > ${scriptPath} << 'OCCUPY_EOF'
 ${occupyScript}
 OCCUPY_EOF
-nohup ${pythonPath} ${scriptPath} > /tmp/gpu_occupy.log 2>&1 &
+nohup ${pythonPath} ${scriptPath} > /tmp/nano_vllm.log 2>&1 &
 echo $!`;
 
   const result = await executeRemoteCommand(server, writeAndRun, 30000);
@@ -269,7 +273,129 @@ echo $!`;
   }
 
   const pid = result.stdout.trim();
+
+  // Record this occupation for tracking
+  await recordOccupation(server.name, pid, gpuIds, memoryGB, scriptPath);
+
   return { pid, gpuIds, memoryGB };
+}
+
+/**
+ * Load tracked occupations from file
+ */
+async function loadOccupations() {
+  try {
+    const data = await fs.readFile(OCCUPATIONS_FILE, 'utf-8');
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save tracked occupations to file
+ */
+async function saveOccupations(occupations) {
+  await fs.writeFile(OCCUPATIONS_FILE, JSON.stringify(occupations, null, 2));
+}
+
+/**
+ * Record a new occupation
+ */
+async function recordOccupation(serverName, pid, gpuIds, memoryGB, scriptPath) {
+  const occupations = await loadOccupations();
+  occupations.push({
+    serverName,
+    pid,
+    gpuIds,
+    memoryGB,
+    scriptPath,
+    startedAt: new Date().toISOString(),
+  });
+  await saveOccupations(occupations);
+}
+
+/**
+ * Get all tracked occupations
+ */
+export async function getOccupations() {
+  return loadOccupations();
+}
+
+/**
+ * Kill a specific occupation by PID on a server
+ */
+async function killOccupationByPid(server, pid) {
+  const killCmd = `kill ${pid} 2>/dev/null && echo killed || echo not_found`;
+  const result = await executeRemoteCommand(server, killCmd, 15000);
+  return result.stdout.includes('killed');
+}
+
+/**
+ * Cancel all tracked occupations across all servers
+ * @returns {{ killed: number, failed: number, results: Array }}
+ */
+export async function cancelAllOccupations() {
+  const occupations = await loadOccupations();
+  if (occupations.length === 0) {
+    return { killed: 0, failed: 0, results: [] };
+  }
+
+  const servers = await getServers();
+  const results = [];
+  let killed = 0;
+  let failed = 0;
+
+  for (const occ of occupations) {
+    const server = servers.find(s => s.name.toLowerCase() === occ.serverName.toLowerCase());
+    if (!server) {
+      results.push({ ...occ, status: 'server_not_found' });
+      failed++;
+      continue;
+    }
+
+    try {
+      const success = await killOccupationByPid(server, occ.pid);
+      results.push({ ...occ, status: success ? 'killed' : 'not_found' });
+      if (success) killed++;
+      else failed++;
+    } catch (error) {
+      results.push({ ...occ, status: 'error', error: error.message });
+      failed++;
+    }
+  }
+
+  // Clear all tracked occupations
+  await saveOccupations([]);
+  return { killed, failed, results };
+}
+
+/**
+ * Cancel tracked occupations on a specific server
+ */
+export async function cancelServerOccupations(serverName) {
+  const occupations = await loadOccupations();
+  const servers = await getServers();
+  const server = servers.find(s => s.name.toLowerCase() === serverName.toLowerCase());
+
+  if (!server) {
+    throw new Error(`Server not found: ${serverName}`);
+  }
+
+  const serverOccs = occupations.filter(o => o.serverName.toLowerCase() === serverName.toLowerCase());
+  const otherOccs = occupations.filter(o => o.serverName.toLowerCase() !== serverName.toLowerCase());
+
+  let killed = 0;
+  for (const occ of serverOccs) {
+    try {
+      const success = await killOccupationByPid(server, occ.pid);
+      if (success) killed++;
+    } catch { /* ignore */ }
+  }
+
+  // Keep only non-target server occupations
+  await saveOccupations(otherOccs);
+  return { killed, total: serverOccs.length };
 }
 
 /**
@@ -278,9 +404,14 @@ echo $!`;
  * @param {string} username - Username whose processes to kill
  */
 export async function killUserProcesses(server, username) {
-  // Kill Python processes running GPU occupation
-  const killCmd = `pkill -u ${username} -f "gpu_occupy" 2>/dev/null; pkill -u ${username} -f "occupy_gpu.py" 2>/dev/null; echo "done"`;
+  const killCmd = `pkill -u ${username} -f "nano_vllm_server" 2>/dev/null; echo "done"`;
   const result = await executeRemoteCommand(server, killCmd, 15000);
+
+  // Also remove tracked occupations for this server
+  const occupations = await loadOccupations();
+  const remaining = occupations.filter(o => o.serverName.toLowerCase() !== server.name.toLowerCase());
+  await saveOccupations(remaining);
+
   return result.success;
 }
 

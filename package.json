@@ -8,10 +8,12 @@
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
     "setup": "node setup-server.js",
-    "test": "node tests/test-features.js"
+    "test": "node tests/test-features.js",
+    "register-discord": "node scripts/register-discord-commands.js"
   },
   "dependencies": {
     "@slack/bolt": "^3.17.0",
+    "discord.js": "^14.25.1",
     "dotenv": "^16.4.0"
   },
   "engines": {

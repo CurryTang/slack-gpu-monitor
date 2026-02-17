@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import bolt from '@slack/bolt';
+import { startDiscord } from './discord.js';
 import {
   getAllServersGpuStatus,
   getLocalGpuStatus,
@@ -7,6 +8,8 @@ import {
   getServerGpuStatus,
   startGpuOccupation,
   killUserProcesses,
+  cancelAllOccupations,
+  getOccupations,
 } from './gpu.js';
 import { formatMultiServerMessage, formatGpuMessage, formatErrorMessage } from './format.js';
 import { addServer, removeServer, editServer, getServers } from './config.js';
@@ -191,20 +194,45 @@ app.command('/monitor', async ({ command, ack, respond }) => {
   }
 });
 
-// /cancel command handler - kill user processes on a server
+// /cancel command handler - kill occupation processes
 app.command('/cancel', async ({ command, ack, respond }) => {
   await ack();
 
-  const args = command.text.trim().split(/\s+/);
+  const args = command.text.trim().split(/\s+/).filter(Boolean);
 
-  if (args.length < 2 || args[0] === 'help') {
+  if (args[0] === 'help') {
     await respond({
-      text: '*Cancel Command*\n\nKill all GPU occupation processes for a user on a server.\n\n*Usage:*\n`/cancel <server_name> <username>`\n\n*Example:*\n`/cancel grandrapids john`',
+      text: '*Cancel Command*\n\n`/cancel` - Cancel all tracked GPU occupations on all servers\n`/cancel <server_name> <username>` - Kill occupation processes for a user on a server\n\n*Example:*\n`/cancel` or `/cancel grandrapids john`',
     });
     return;
   }
 
   try {
+    // No args: cancel all tracked occupations
+    if (args.length === 0) {
+      const occs = await getOccupations();
+      if (occs.length === 0) {
+        await respond({ text: '📋 No tracked GPU occupations to cancel.' });
+        return;
+      }
+
+      await respond({ text: `⏳ Cancelling ${occs.length} tracked occupation(s) across all servers...` });
+      const { killed, failed, results } = await cancelAllOccupations();
+
+      const lines = results.map(r =>
+        `• *${r.serverName}* PID ${r.pid} (GPUs: ${r.gpuIds.join(',')}) → ${r.status}`
+      ).join('\n');
+
+      await respond({ text: `✅ Done. Killed: ${killed}, Not found/failed: ${failed}\n${lines}` });
+      return;
+    }
+
+    // With args: legacy cancel by server + username
+    if (args.length < 2) {
+      await respond({ text: '⚠️ Usage: `/cancel` (cancel all) or `/cancel <server> <username>`' });
+      return;
+    }
+
     const serverName = args[0];
     const username = args[1];
 
@@ -871,8 +899,10 @@ function getMainHelpMessage() {
   };
 }
 
-// Start the app
+// Start both bots
 (async () => {
   await app.start();
-  console.log('⚡️ GPU Monitor bot is running!');
+  console.log('⚡️ Slack GPU Monitor bot is running!');
+
+  await startDiscord();
 })();

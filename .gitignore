@@ -5,6 +5,7 @@
 
 # Server configuration
 servers.json
+occupations.json
 
 # Dependencies
 node_modules/
