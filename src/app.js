@@ -904,5 +904,9 @@ function getMainHelpMessage() {
   await app.start();
   console.log('⚡️ Slack GPU Monitor bot is running!');
 
-  await startDiscord();
+  try {
+    await startDiscord();
+  } catch (error) {
+    console.error('Failed to start Discord bot:', error);
+  }
 })();
