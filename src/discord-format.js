@@ -1,5 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
-import { getGpuStatusIndicator } from './gpu.js';
+import { getGpuStatusIndicator, getTopUserForGpu } from './gpu.js';
 
 /**
  * Create a text-based progress bar
@@ -76,12 +76,15 @@ export function formatMultiServerEmbeds(serverResults) {
       continue;
     }
 
+    const processes = result.processes || new Map();
     const gpuLines = result.gpus.map(gpu => {
       const status = getGpuStatusIndicator(gpu);
       const memGB = (gpu.memoryUsed / 1024).toFixed(1);
       const memTotalGB = (gpu.memoryTotal / 1024).toFixed(1);
       const shortName = gpu.name.replace(/NVIDIA\s*(RTX\s*)?/i, '').replace(/\s+NVL.*$/i, '').trim();
-      return `${status.emoji} **${gpu.index}:** ${shortName} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB`;
+      const topUser = getTopUserForGpu(processes, gpu.index);
+      const topUserStr = topUser ? ` | 👤 ${topUser.user}` : '';
+      return `${status.emoji} **${gpu.index}:** ${shortName} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB${topUserStr}`;
     });
 
     embeds.push(

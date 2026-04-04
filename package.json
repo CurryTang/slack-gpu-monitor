@@ -4,9 +4,13 @@
   "description": "Slack bot for monitoring GPU status via nvidia-smi",
   "main": "src/app.js",
   "type": "module",
+  "bin": {
+    "gpu-cli": "src/cli.js"
+  },
   "scripts": {
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
+    "cli": "node src/cli.js",
     "setup": "node setup-server.js",
     "test": "node tests/test-features.js",
     "register-discord": "node scripts/register-discord-commands.js"

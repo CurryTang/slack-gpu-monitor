@@ -3,6 +3,7 @@ import bolt from '@slack/bolt';
 import { startDiscord } from './discord.js';
 import {
   getAllServersGpuStatus,
+  getAllServersGpuStatusWithProcesses,
   getLocalGpuStatus,
   parseGpuInfo,
   getServerGpuStatus,
@@ -281,7 +282,7 @@ app.event('message', async ({ event, say }) => {
       if (servers.length === 0) {
         await say({ text: '⚠️ No servers configured. Use `/config add` to add servers.' });
       } else {
-        const results = await getAllServersGpuStatus();
+        const results = await getAllServersGpuStatusWithProcesses();
         await say(formatMultiServerMessage(results));
       }
     } catch (error) {
@@ -516,8 +517,8 @@ async function handleGpuStatus(respond) {
     return;
   }
 
-  // Query all servers
-  const results = await getAllServersGpuStatus();
+  // Query all servers with process info
+  const results = await getAllServersGpuStatusWithProcesses();
   const message = formatMultiServerMessage(results);
   await respond(message);
 }
@@ -555,7 +556,7 @@ async function handleStartMonitoring(channelId, respond, intervalArg) {
         const gpuInfo = parseGpuInfo(gpuData);
         message = formatGpuMessage(gpuInfo, 'Local');
       } else {
-        const results = await getAllServersGpuStatus();
+        const results = await getAllServersGpuStatusWithProcesses();
         message = formatMultiServerMessage(results);
       }
 

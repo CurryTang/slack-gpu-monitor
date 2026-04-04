@@ -10,6 +10,7 @@ const CONFIG_FILE = path.join(__dirname, '..', 'servers.json');
  */
 const DEFAULT_CONFIG = {
   servers: [],
+  username: null,
 };
 
 /**
@@ -146,6 +147,24 @@ export async function getServer(nameOrId) {
       s.id === nameOrId ||
       s.name.toLowerCase() === nameOrId.toLowerCase()
   );
+}
+
+/**
+ * Get configured username
+ */
+export async function getUsername() {
+  const config = await loadConfig();
+  return config.username || null;
+}
+
+/**
+ * Set username
+ */
+export async function setUsername(username) {
+  const config = await loadConfig();
+  config.username = username || null;
+  await saveConfig(config);
+  return config.username;
 }
 
 /**

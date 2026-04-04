@@ -12,6 +12,14 @@ const OCCUPATIONS_FILE = path.join(__dirname, '..', 'occupations.json');
 const NVIDIA_SMI_CMD =
   'nvidia-smi --query-gpu=index,name,temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,power.limit --format=csv,noheader,nounits';
 
+const GPU_PROCESS_CMD = [
+  'nvidia-smi --query-gpu=index,uuid --format=csv,noheader',
+  'echo "---SEP---"',
+  'nvidia-smi --query-compute-apps=gpu_uuid,pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null || true',
+  'echo "---SEP---"',
+  'ps -eo pid=,user= 2>/dev/null || true',
+].join('; ');
+
 /**
  * Execute nvidia-smi locally and return raw output
  */
@@ -430,4 +438,142 @@ export async function getServerGpuStatus(serverName) {
   const csvOutput = await getRemoteGpuStatus(server);
   const gpus = parseGpuInfo(csvOutput);
   return { server, gpus };
+}
+
+/**
+ * Parse GPU process info from combined nvidia-smi + ps output
+ * Returns { gpuProcesses: Map<gpuIndex, [{pid, user, memoryMB}]> }
+ */
+function parseProcessInfo(rawOutput) {
+  const sections = rawOutput.split('---SEP---').map(s => s.trim());
+  if (sections.length < 3) return new Map();
+
+  // Parse GPU index -> UUID mapping
+  const uuidToIndex = new Map();
+  for (const line of sections[0].split('\n').filter(l => l.trim())) {
+    const [index, uuid] = line.split(',').map(s => s.trim());
+    uuidToIndex.set(uuid, parseInt(index));
+  }
+
+  // Parse PID -> user mapping
+  const pidToUser = new Map();
+  for (const line of sections[2].split('\n').filter(l => l.trim())) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      pidToUser.set(parts[0], parts[1]);
+    }
+  }
+
+  // Parse compute apps: gpu_uuid, pid, used_memory
+  const gpuProcesses = new Map();
+  for (const line of sections[1].split('\n').filter(l => l.trim())) {
+    const [gpuUuid, pid, usedMem] = line.split(',').map(s => s.trim());
+    const gpuIndex = uuidToIndex.get(gpuUuid);
+    if (gpuIndex === undefined) continue;
+
+    if (!gpuProcesses.has(gpuIndex)) {
+      gpuProcesses.set(gpuIndex, []);
+    }
+    gpuProcesses.get(gpuIndex).push({
+      pid,
+      user: pidToUser.get(pid) || 'unknown',
+      memoryMB: parseInt(usedMem) || 0,
+    });
+  }
+
+  return gpuProcesses;
+}
+
+/**
+ * Get GPU process info for a remote server
+ * @param {Object} server - Server configuration
+ * @returns {Map<number, Array<{pid, user, memoryMB}>>} GPU index -> processes
+ */
+export async function getRemoteGpuProcesses(server) {
+  const result = await executeRemoteCommand(server, GPU_PROCESS_CMD, 30000);
+  if (!result.success) return new Map();
+  return parseProcessInfo(result.stdout);
+}
+
+/**
+ * Get GPU process info locally
+ * @returns {Map<number, Array<{pid, user, memoryMB}>>}
+ */
+export async function getLocalGpuProcesses() {
+  try {
+    const { stdout } = await execAsync(GPU_PROCESS_CMD, { shell: true, timeout: 30000 });
+    return parseProcessInfo(stdout);
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Get GPU status with process info from all servers
+ * Returns array of { server, gpus, processes, error }
+ */
+export async function getAllServersGpuStatusWithProcesses() {
+  const servers = await getServers();
+
+  const promises = servers.map(async (server) => {
+    try {
+      const [csvOutput, processes] = await Promise.all([
+        getRemoteGpuStatus(server),
+        getRemoteGpuProcesses(server),
+      ]);
+      const gpus = parseGpuInfo(csvOutput);
+      return { server, gpus, processes, error: null };
+    } catch (error) {
+      return { server, gpus: [], processes: new Map(), error: error.message };
+    }
+  });
+
+  return Promise.all(promises);
+}
+
+/**
+ * Get top user per GPU from process map
+ * @param {Map} processes - GPU index -> process list
+ * @param {number} gpuIndex
+ * @returns {{ user: string, memoryMB: number } | null}
+ */
+export function getTopUserForGpu(processes, gpuIndex) {
+  const procs = processes.get(gpuIndex);
+  if (!procs || procs.length === 0) return null;
+
+  // Aggregate memory by user
+  const userMem = new Map();
+  for (const p of procs) {
+    userMem.set(p.user, (userMem.get(p.user) || 0) + p.memoryMB);
+  }
+
+  // Find top user
+  let topUser = null;
+  let topMem = 0;
+  for (const [user, mem] of userMem) {
+    if (mem > topMem) {
+      topUser = user;
+      topMem = mem;
+    }
+  }
+
+  return topUser ? { user: topUser, memoryMB: topMem } : null;
+}
+
+/**
+ * Get all processes for a specific user from process map
+ * @param {Map} processes - GPU index -> process list
+ * @param {string} username
+ * @returns {Array<{gpuIndex, pid, memoryMB}>}
+ */
+export function getUserProcesses(processes, username) {
+  const result = [];
+  for (const [gpuIndex, procs] of processes) {
+    for (const p of procs) {
+      if (p.user === username) {
+        result.push({ gpuIndex, pid: p.pid, memoryMB: p.memoryMB });
+      }
+    }
+  }
+  return result;
 }

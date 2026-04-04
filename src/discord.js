@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import {
   getAllServersGpuStatus,
+  getAllServersGpuStatusWithProcesses,
   getLocalGpuStatus,
   parseGpuInfo,
   getServerGpuStatus,
@@ -88,7 +89,7 @@ async function handleGpu(interaction) {
         return;
       }
 
-      const results = await getAllServersGpuStatus();
+      const results = await getAllServersGpuStatusWithProcesses();
       const embeds = formatMultiServerEmbeds(results);
       await interaction.editReply({ embeds });
       break;
@@ -125,7 +126,7 @@ async function handleGpu(interaction) {
           return;
         }
       } else {
-        const results = await getAllServersGpuStatus();
+        const results = await getAllServersGpuStatusWithProcesses();
         embeds = formatMultiServerEmbeds(results);
       }
 
@@ -143,7 +144,7 @@ async function handleGpu(interaction) {
             const gpuInfo = parseGpuInfo(gpuData);
             msg = { embeds: [formatGpuEmbed(gpuInfo, 'Local')] };
           } else {
-            const results = await getAllServersGpuStatus();
+            const results = await getAllServersGpuStatusWithProcesses();
             msg = { embeds: formatMultiServerEmbeds(results) };
           }
 

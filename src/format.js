@@ -1,4 +1,4 @@
-import { getGpuStatusIndicator } from './gpu.js';
+import { getGpuStatusIndicator, getTopUserForGpu } from './gpu.js';
 
 /**
  * Format GPU info into a Slack Block Kit message
@@ -146,6 +146,7 @@ export function formatMultiServerMessage(serverResults) {
       // This drastically reduces the number of blocks used
       // Slack section text limit is 3000 chars, so we may need to split
       const serverHeader = `${serverStatus} *${result.server.name}*`;
+      const processes = result.processes || new Map();
       const gpuLines = result.gpus.map((gpu) => {
         const status = getGpuStatusIndicator(gpu);
         const memoryPercent = ((gpu.memoryUsed / gpu.memoryTotal) * 100).toFixed(0);
@@ -153,7 +154,9 @@ export function formatMultiServerMessage(serverResults) {
         const memTotalGB = (gpu.memoryTotal / 1024).toFixed(1);
         // Extract short GPU name (e.g., "NVIDIA RTX A6000" -> "A6000", "NVIDIA H100 NVL" -> "H100")
         const shortName = gpu.name.replace(/NVIDIA\s*(RTX\s*)?/i, '').replace(/\s+NVL.*$/i, '').trim();
-        return `${status.emoji} ${gpu.index}: ${shortName} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB`;
+        const topUser = getTopUserForGpu(processes, gpu.index);
+        const topUserStr = topUser ? ` | 👤 ${topUser.user}` : '';
+        return `${status.emoji} ${gpu.index}: ${shortName} | ${gpu.gpuUtilization}% | ${memGB}/${memTotalGB}GB${topUserStr}`;
       });
 
       // Check if we need to split into multiple blocks (3000 char limit)
